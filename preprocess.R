@@ -38,57 +38,54 @@ preprocess <- function(file, writeIn=F, writeOut=F, outdir='', cols=NULL, nIter=
   cat('Computing useful variables...\n')
   
   # Compute useful variables
+  if(is.null(cols)){
+    cols = c('User', 'gameNum', 'ELO', 'White', 'Black', 'Result', 'WhiteElo', 'BlackElo', 
+             'time_elapsed', 'uOutcome', 'combinedTime', 'TimeControl', 'Site')
+  }
+  
   # Machine-readable time (date and time)
   raw$combinedTime = paste0(raw$UTCDate, ' ', raw$UTCTime)
   
-  # List of unique players (whether white or black)
-  uniqueUsers = unique(c(as.character(raw$White), as.character(raw$Black)))
+  # games users played as white
+  white = raw
+  white$User = white$White
   
-  # Initialize output dataframe
-  if(is.null(cols)){
-    cols = c('User', 'gameNum', 'ELO', 'White', 'Black', 'Result', 'WhiteElo', 'BlackElo', 
-             'time_elapsed', 'uOutcome', 'combinedTime')
-  }
- 
-  dat = list()
-  for (user in uniqueUsers){
-    # keep track (this can take awhile with thousands of players...)
-    progress=match(user, uniqueUsers)/length(uniqueUsers)
-    cat('data parsing for user', match(user, uniqueUsers), '/', length(uniqueUsers), '\n')
-   
-    # if(round(progress) %in% seq(.1,1,by=.1)){
-    #   cat('data parsing is', round(progress)*10, '% complete.\n') 
-    # }
-    
-    # iterate through players 
-    thisUser=raw[raw$White==user | raw$Black==user, ]
-    thisUser = thisUser[!is.na(thisUser$Site), ]                   # remove blank cells
-    if(nrow(thisUser)==1) next                                     # skip players who only played once 
-    
-    thisUser=thisUser[order(thisUser$UTCDate, thisUser$UTCTime), ] # sort by date and time
-    thisUser$User = user
-    thisUser$gameNum = 1:nrow(thisUser)
-    thisUser$ELO = ifelse(thisUser[1,'White']==user, thisUser[1,'WhiteElo'], thisUser[1,'BlackElo'] )
-    
-    # compute time between games and outcomes
-    this_time = as.POSIXct(thisUser$combinedTime, format='%Y.%m.%d %H:%M:%S', tz='GMC')
-    last_time = dplyr::lag(this_time)
-    thisUser$time_elapsed = difftime(this_time,last_time, units='min')
-    
-    # compute result for this user
-    isWhite = ifelse(thisUser$White==user,1,0)
-    thisUser$uOutcome = ifelse(thisUser$Result=='1/2-1/2', 0.5, 
-                               ifelse(isWhite==1 & thisUser$Result=='1-0', 1, 
-                                      ifelse(isWhite==0 & thisUser$Result=='0-1', 1, 
-                                             0)))
-    
-    dat[[user]] = thisUser[,cols]
-  }
+  # games user played as black = raw
+  black = raw
+  black$User = black$Black
   
-  cat('formatting output...\n')
-  out = do.call(rbind.data.frame, dat)
-  rownames(out) = NULL
+  # combine by user and order by user and time
+  dat = rbind(white, black)
+  dat = dat[order(dat$User, dat$combinedTime), ]
   
-  if(writeOut) write.csv(out, paste0(paste0(outdir, '/'), gsub('.pgn', '_processed.csv', filename)))
-  return(out)
+  # append useful variables
+  # number of games
+  dat$gameNum = ave(dat$X, dat$User, FUN=function(x) 1:length(x))
+  
+  # user ELO
+  dat$ELO = ifelse(dat$User==dat$White, dat$WhiteElo, dat$BlackElo)
+  
+  # time between games
+  this_time = as.POSIXct(dat$combinedTime, format='%Y.%m.%d %H:%M:%S', tz='GMC')
+  last_time = dplyr::lag(this_time)
+  dat$time_elapsed = as.numeric(difftime(this_time,last_time, units='min'))
+  dat$time_elapsed[dat$gameNum==1] = NA # no last game prior to recordings
+  
+  # result relative to that user
+  isWhite = ifelse(dat$White==dat$User,1,0)
+  dat$uOutcome = ifelse(dat$Result=='1/2-1/2', 0.5, 
+                             ifelse(isWhite==1 & dat$Result=='1-0', 1, 
+                                    ifelse(isWhite==0 & dat$Result=='0-1', 1, 
+                                           0)))
+  # only take columns of interest
+  dat = dat[,cols]
+  
+  # remove users with only one game
+  ngames = table(dat$User)
+  dat = dat[!dat$User %in% names(ngames)[ngames==1], ]
+  
+  # x = dat[dat$User == unique(dat$User)[103], ] # check for one user if debugging
+  
+  if(writeOut) write.csv(dat, paste0(paste0(outdir, '/'), gsub('.pgn', '_processed.csv', filename)))
+  return(dat)
 }
